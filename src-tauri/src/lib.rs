@@ -1,6 +1,7 @@
 //! Lwnny: one RGB controller for your whole PC. Tauri shell around [`engine::Engine`].
 
 pub mod devices;
+pub mod elevate;
 pub mod engine;
 
 use devices::{DeviceInfo, Rgb};
@@ -12,7 +13,6 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, State,
 };
-use tauri_plugin_autostart::ManagerExt;
 
 pub struct AppState(pub Shared);
 
@@ -30,18 +30,20 @@ struct Snapshot {
     settings: Settings,
     profiles: Vec<String>,
     autostart: bool,
+    elevated: bool,
 }
 
 #[tauri::command]
-fn snapshot(app: tauri::AppHandle, state: State<'_, AppState>) -> CmdResult<Snapshot> {
+fn snapshot(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     let e = state.0.lock().map_err(err)?;
     Ok(Snapshot {
         devices: e.device_infos(),
-        status: e.status().to_vec(),
+        status: e.status(),
         scene: e.scene().clone(),
         settings: e.settings().clone(),
         profiles: e.list_profiles(),
-        autostart: app.autolaunch().is_enabled().unwrap_or(false),
+        autostart: elevate::autostart_enabled(),
+        elevated: elevate::is_elevated(),
     })
 }
 
@@ -49,7 +51,7 @@ fn snapshot(app: tauri::AppHandle, state: State<'_, AppState>) -> CmdResult<Snap
 fn rescan(state: State<'_, AppState>) -> CmdResult<Vec<DeviceStatus>> {
     let mut e = state.0.lock().map_err(err)?;
     e.rescan();
-    Ok(e.status().to_vec())
+    Ok(e.status())
 }
 
 #[tauri::command]
@@ -155,14 +157,8 @@ fn set_color_fix(state: State<'_, AppState>, device: String, fix: ColorFix) -> C
 }
 
 #[tauri::command]
-fn set_autostart(app: tauri::AppHandle, enabled: bool) -> CmdResult<bool> {
-    let al = app.autolaunch();
-    if enabled {
-        al.enable().map_err(err)?;
-    } else {
-        al.disable().map_err(err)?;
-    }
-    al.is_enabled().map_err(err)
+fn set_autostart(enabled: bool) -> CmdResult<bool> {
+    elevate::set_autostart(enabled).map_err(err)
 }
 
 /// Show the main window, recreating it if it was destroyed to free memory.
@@ -186,6 +182,16 @@ fn show_main(app: &tauri::AppHandle) {
 pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // The RAM needs the kernel driver, which needs administrator rights.
+    // Ask once; if declined, run without RAM.
+    if !elevate::is_elevated() {
+        match elevate::relaunch_elevated() {
+            Ok(true) => return,
+            Ok(false) => log::warn!("elevation declined: RAM lighting unavailable"),
+            Err(e) => log::warn!("elevation failed: {e}"),
+        }
+    }
+
     let engine = Engine::new();
     let start_minimized = engine.settings().start_minimized && std::env::args().any(|a| a == "--minimized");
     let shared: Shared = Arc::new(Mutex::new(engine));
@@ -197,10 +203,6 @@ pub fn run() {
     engine::spawn_ticker(shared.clone());
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--minimized"]),
-        ))
         .manage(AppState(shared))
         .invoke_handler(tauri::generate_handler![
             snapshot,
@@ -233,7 +235,15 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => show_main(app),
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        // Let a pending RAM write finish before we go.
+                        if let Some(state) = app.try_state::<AppState>() {
+                            if let Ok(e) = state.0.lock() {
+                                e.wait_deferred();
+                            }
+                        }
+                        app.exit(0)
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

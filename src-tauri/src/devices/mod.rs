@@ -9,9 +9,11 @@
 //! here in Rust for this machine's exact hardware.
 
 pub mod aura;
+pub mod corsair_dram;
 pub mod ene_gpu;
 pub mod lianli_hub;
 pub mod nvapi;
+pub mod pawnio;
 pub mod quadcast;
 pub mod strimer;
 
@@ -143,6 +145,13 @@ pub trait Device: Send {
     /// Software path: push one already-computed frame (one color per zone).
     fn write_frame(&mut self, _colors: &[Rgb]) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    /// Some devices store every write in flash (RAM sticks). For those the
+    /// engine waits until the colors stop changing for this long before it
+    /// calls `apply`, so dragging a color picker does not wear the flash.
+    fn commit_delay(&self) -> Option<std::time::Duration> {
+        None
     }
 
     /// Diagnostic dump of device state for the probe CLI.

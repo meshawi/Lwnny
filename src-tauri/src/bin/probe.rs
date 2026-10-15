@@ -99,8 +99,8 @@ fn main() {
                 let (a, b) = range.split_once('-').unwrap_or((range, range));
                 let (a, b): (usize, usize) = (a.parse().expect("from"), b.parse().expect("to"));
                 let c = Rgb::from_hex(hex).expect("hex");
-                for i in a..=b.min(total - 1) {
-                    leds[i] = c;
+                for led in leds.iter_mut().take(b + 1).skip(a) {
+                    *led = c;
                 }
             }
             match engine.with_device(dev, |d| d.write_leds(&leds)) {
@@ -129,8 +129,31 @@ fn main() {
             engine.set_all_color(Rgb::BLACK);
             report(engine.push());
         }
+        "rambench" => {
+            // Time SMBus byte reads under each PawnIO wait mode (no writes).
+            use lwnny_lib::devices::pawnio::{Smbus, SLEEPMODE_BUSY, SLEEPMODE_SHORT_BUSY, SLEEPMODE_SLEEP};
+            drop(engine);
+            let bus = Smbus::open_piix4().expect("open SMBus (run as administrator)");
+            bus.select_port0().expect("port 0");
+            for (name, mode) in [("spin", SLEEPMODE_BUSY), ("sleep+spin", SLEEPMODE_SHORT_BUSY), ("sleep", SLEEPMODE_SLEEP)] {
+                bus.set_sleep_mode(mode).expect("sleep mode");
+                let t0 = std::time::Instant::now();
+                let mut ok = 0;
+                for _ in 0..40 {
+                    if bus.read_byte_data(0x58, 0x43).is_ok() {
+                        ok += 1;
+                    }
+                }
+                let per = t0.elapsed().as_secs_f64() * 1000.0 / 40.0;
+                println!("mode {name:<10} {per:6.2} ms per byte read ({ok}/40 ok)");
+            }
+            return;
+        }
         other => eprintln!("unknown command {other}"),
     }
+    // Devices such as RAM are written a moment after the last change.
+    engine.wait_deferred();
+    report(engine.status().into_iter().filter(|s| !s.ok).collect());
 }
 
 fn report(results: Vec<lwnny_lib::engine::DeviceStatus>) {

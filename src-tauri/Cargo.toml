@@ -1,6 +1,6 @@
 [package]
 name = "lwnny"
-version = "0.1.0"
+version = "0.2.0"
 description = "Lwnny - one RGB controller for your whole PC"
 edition = "2021"
 rust-version = "1.80"
@@ -23,7 +23,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
@@ -32,6 +31,17 @@ libloading = "0.8"
 dirs = "6"
 log = "0.4"
 env_logger = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [profile.release]
 opt-level = 2

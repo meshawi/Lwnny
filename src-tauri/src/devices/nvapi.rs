@@ -121,6 +121,8 @@ impl NvApi {
     }
 
     /// I2C write: `reg` (0 or 1 byte) followed by `data`.
+    // `gpu` is an opaque handle handed back to NvAPI, never dereferenced here.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn i2c_write(&self, gpu: NvHandle, addr: u8, reg: &[u8], data: &[u8]) -> Result<()> {
         let mut reg = reg.to_vec();
         let mut data = data.to_vec();
@@ -134,6 +136,7 @@ impl NvApi {
     }
 
     /// I2C read of `len` bytes after sending `reg`.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn i2c_read(&self, gpu: NvHandle, addr: u8, reg: &[u8], len: usize) -> Result<Vec<u8>> {
         let mut reg = reg.to_vec();
         let mut data = vec![0u8; len];

@@ -231,6 +231,9 @@ function renderControls() {
   for (let i = 0; i < 4; i++) $(`fans-${i}`).value = snap.settings.hub_fans_per_port[i];
   for (let i = 0; i < 2; i++) $(`argb-${i}`).value = snap.settings.aura_header_leds[i];
   $("autostart").checked = !!snap.autostart;
+  if (snap.elevated === false) {
+    setStatus("Running without administrator rights: RAM lighting is unavailable. Restart Lwnny and accept the prompt.", true);
+  }
 
   const list = $("profiles");
   list.innerHTML = "";

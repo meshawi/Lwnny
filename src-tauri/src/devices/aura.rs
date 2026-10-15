@@ -75,8 +75,8 @@ impl AuraMainboard {
             channels.push(Channel { effect_channel, direct_channel: 0x04, fw_leds: mb_leds });
             effect_channel += 1;
         }
-        for i in 0..argb_headers.min(2) {
-            zones.push(Zone { name: format!("Addressable header {}", i + 1), leds: header_leds[i] as usize });
+        for (i, &leds) in header_leds.iter().enumerate().take(argb_headers.min(2)) {
+            zones.push(Zone { name: format!("Addressable header {}", i + 1), leds: leds as usize });
             channels.push(Channel { effect_channel, direct_channel: i as u8, fw_leds: 1 });
             effect_channel += 1;
         }

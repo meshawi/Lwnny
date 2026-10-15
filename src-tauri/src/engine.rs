@@ -14,7 +14,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{atomic::{AtomicUsize, Ordering}, mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -125,6 +125,63 @@ pub struct Engine {
     started: Instant,
     /// Bumped on every rescan so workers for stale devices exit.
     generation: u64,
+    /// Writes for devices with a commit delay go here; see [`committer`].
+    deferred: mpsc::Sender<DeferredWrite>,
+    /// Outcome of the last deferred write per device id.
+    deferred_errors: Arc<Mutex<BTreeMap<String, Option<String>>>>,
+    /// Deferred writes queued but not yet done.
+    deferred_pending: Arc<AtomicUsize>,
+}
+
+/// A write queued for a device that stores colors in flash.
+struct DeferredWrite {
+    id: String,
+    dev: DevHandle,
+    colors: Vec<Rgb>,
+    brightness: u8,
+    delay: Duration,
+}
+
+/// Waits until a device's colors stop changing, then writes the latest
+/// ones. Keeps a color-picker drag from wearing the device's flash.
+fn committer(rx: mpsc::Receiver<DeferredWrite>, errors: Arc<Mutex<BTreeMap<String, Option<String>>>>, pending: Arc<AtomicUsize>) {
+    let mut latest: BTreeMap<String, DeferredWrite> = BTreeMap::new();
+    loop {
+        let mut received = 0usize;
+        if latest.is_empty() {
+            match rx.recv() {
+                Ok(w) => {
+                    latest.insert(w.id.clone(), w);
+                    received += 1;
+                }
+                Err(_) => return,
+            }
+        }
+        // Keep collecting while writes keep coming; only the latest per
+        // device is written.
+        loop {
+            let delay = latest.values().map(|w| w.delay).max().unwrap_or(Duration::from_millis(500));
+            match rx.recv_timeout(delay) {
+                Ok(w) => {
+                    latest.insert(w.id.clone(), w);
+                    received += 1;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+        }
+        for (id, w) in std::mem::take(&mut latest) {
+            let r = Render { colors: &w.colors, effect: Effect::Static, brightness: w.brightness };
+            let res = w.dev.lock().map_err(|_| anyhow!("device lock poisoned")).and_then(|mut d| d.apply(&r));
+            if let Err(e) = &res {
+                log::warn!("{id}: deferred write failed: {e:#}");
+            }
+            if let Ok(mut m) = errors.lock() {
+                m.insert(id, res.err().map(|e| format!("{e:#}")));
+            }
+        }
+        pending.fetch_sub(received, Ordering::SeqCst);
+    }
 }
 
 pub type Shared = Arc<Mutex<Engine>>;
@@ -158,10 +215,17 @@ fn write_json<T: Serialize>(path: &PathBuf, v: &T) -> Result<()> {
 
 impl Engine {
     /// Load settings and the last scene from disk, then detect hardware.
+    // Not `Default`: construction scans the hardware.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Engine {
         let dir = data_dir();
         let settings: Settings = read_json(&dir.join("settings.json")).unwrap_or_default();
         let scene: Scene = read_json(&dir.join("scene.json")).unwrap_or_default();
+        let (tx, rx) = mpsc::channel();
+        let deferred_errors = Arc::new(Mutex::new(BTreeMap::new()));
+        let deferred_pending = Arc::new(AtomicUsize::new(0));
+        let (errors, pending) = (deferred_errors.clone(), deferred_pending.clone());
+        thread::spawn(move || committer(rx, errors, pending));
         let mut e = Engine {
             entries: Vec::new(),
             scene,
@@ -169,6 +233,9 @@ impl Engine {
             status: Vec::new(),
             started: Instant::now(),
             generation: 0,
+            deferred: tx,
+            deferred_errors,
+            deferred_pending,
         };
         e.rescan();
         e
@@ -178,6 +245,9 @@ impl Engine {
     pub fn rescan(&mut self) {
         self.entries.clear();
         self.status.clear();
+        if let Ok(mut m) = self.deferred_errors.lock() {
+            m.clear();
+        }
         self.generation += 1;
         let s = self.settings.clone();
 
@@ -191,6 +261,7 @@ impl Engine {
             Err(e) => self.status.push(DeviceStatus { id: "hid".into(), ok: false, error: Some(format!("HID init failed: {e}")) }),
         }
         self.add(devices::ene_gpu::ID, devices::ene_gpu::EneGpu::open().map(|d| d.map(|d| Box::new(d) as Box<dyn Device>)));
+        self.add(devices::corsair_dram::ID, devices::corsair_dram::CorsairDram::open().map(|d| d.map(|d| Box::new(d) as Box<dyn Device>)));
 
         self.apply_zone_names();
         self.ensure_slots();
@@ -234,8 +305,27 @@ impl Engine {
         self.entries.iter().map(|e| e.info.clone()).collect()
     }
 
-    pub fn status(&self) -> &[DeviceStatus] {
-        &self.status
+    /// Block until every queued deferred write has been done (the probe
+    /// CLI and app exit use this so a RAM write is not cut off).
+    pub fn wait_deferred(&self) {
+        let started = Instant::now();
+        while self.deferred_pending.load(Ordering::SeqCst) > 0 && started.elapsed() < Duration::from_secs(10) {
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Per-device result of the last write, including deferred ones.
+    pub fn status(&self) -> Vec<DeviceStatus> {
+        let mut out = self.status.clone();
+        if let Ok(m) = self.deferred_errors.lock() {
+            for s in out.iter_mut() {
+                if let Some(err) = m.get(&s.id) {
+                    s.ok = err.is_none();
+                    s.error = err.clone();
+                }
+            }
+        }
+        out
     }
 
     pub fn scene(&self) -> &Scene {
@@ -360,8 +450,19 @@ impl Engine {
             let id = e.info.id.clone();
             let raw = self.scene.colors.get(&id).cloned().unwrap_or_default();
             let colors = self.corrected(&id, &raw);
-            let r = Render { colors: &colors, effect: Effect::Static, brightness: self.scene.brightness };
-            let res = e.dev.lock().map_err(|_| anyhow!("device lock poisoned")).and_then(|mut d| d.apply(&r));
+            let delay = e.dev.lock().ok().and_then(|d| d.commit_delay());
+            let res = match delay {
+                Some(delay) => {
+                    // Written by the committer thread once the color settles.
+                    let w = DeferredWrite { id: id.clone(), dev: e.dev.clone(), colors: colors.clone(), brightness: self.scene.brightness, delay };
+                    self.deferred_pending.fetch_add(1, Ordering::SeqCst);
+                    self.deferred.send(w).map_err(|_| anyhow!("committer thread gone"))
+                }
+                None => {
+                    let r = Render { colors: &colors, effect: Effect::Static, brightness: self.scene.brightness };
+                    e.dev.lock().map_err(|_| anyhow!("device lock poisoned")).and_then(|mut d| d.apply(&r))
+                }
+            };
             out.push(DeviceStatus { id, ok: res.is_ok(), error: res.err().map(|e| format!("{e:#}")) });
         }
         for s in &out {
@@ -517,5 +618,70 @@ fn worker(shared: Shared, idx: usize, gen: u64) {
             }
             None => thread::sleep(Duration::from_millis(500)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Counts applies and remembers the last colors.
+    struct Counter {
+        info: DeviceInfo,
+        applies: Arc<AtomicUsize>,
+        last: Arc<Mutex<Vec<Rgb>>>,
+    }
+
+    impl Device for Counter {
+        fn info(&self) -> &DeviceInfo {
+            &self.info
+        }
+        fn apply(&mut self, r: &Render) -> Result<()> {
+            self.applies.fetch_add(1, Ordering::SeqCst);
+            *self.last.lock().unwrap() = r.colors.to_vec();
+            Ok(())
+        }
+    }
+
+    fn wait_idle(pending: &AtomicUsize) {
+        let started = Instant::now();
+        while pending.load(Ordering::SeqCst) > 0 && started.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn committer_writes_only_the_last_color_after_the_burst() {
+        let applies = Arc::new(AtomicUsize::new(0));
+        let last = Arc::new(Mutex::new(Vec::new()));
+        let dev: DevHandle = Arc::new(Mutex::new(Box::new(Counter {
+            info: DeviceInfo { id: "t".into(), name: String::new(), kind: String::new(), zones: Vec::new(), supports_save: false, note: String::new() },
+            applies: applies.clone(),
+            last: last.clone(),
+        })));
+        let (tx, rx) = mpsc::channel();
+        let errors = Arc::new(Mutex::new(BTreeMap::new()));
+        let pending = Arc::new(AtomicUsize::new(0));
+        let (e2, p2) = (errors.clone(), pending.clone());
+        thread::spawn(move || committer(rx, e2, p2));
+
+        // A drag: ten colors 20 ms apart, settle time 100 ms.
+        for i in 0..10u8 {
+            pending.fetch_add(1, Ordering::SeqCst);
+            tx.send(DeferredWrite { id: "t".into(), dev: dev.clone(), colors: vec![Rgb::new(i, 0, 0)], brightness: 100, delay: Duration::from_millis(100) }).unwrap();
+            thread::sleep(Duration::from_millis(20));
+        }
+        wait_idle(&pending);
+        assert_eq!(pending.load(Ordering::SeqCst), 0, "pending count returns to zero");
+        assert_eq!(applies.load(Ordering::SeqCst), 1, "one write for the whole drag");
+        assert_eq!(*last.lock().unwrap(), vec![Rgb::new(9, 0, 0)], "the last color wins");
+        assert_eq!(errors.lock().unwrap().get("t"), Some(&None), "status recorded as ok");
+
+        // A second, separate change is written again.
+        pending.fetch_add(1, Ordering::SeqCst);
+        tx.send(DeferredWrite { id: "t".into(), dev: dev.clone(), colors: vec![Rgb::new(0, 5, 0)], brightness: 100, delay: Duration::from_millis(50) }).unwrap();
+        wait_idle(&pending);
+        assert_eq!(applies.load(Ordering::SeqCst), 2);
+        assert_eq!(*last.lock().unwrap(), vec![Rgb::new(0, 5, 0)]);
     }
 }

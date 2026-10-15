@@ -45,8 +45,8 @@ impl LianLiHub {
         let product = dev.get_product_string().ok().flatten().unwrap_or_default();
 
         let mut zones = Vec::new();
-        for port in 0..4 {
-            let fans = (fans_per_port[port] as usize).min(MAX_FANS);
+        for (port, &n) in fans_per_port.iter().enumerate().take(4) {
+            let fans = (n as usize).min(MAX_FANS);
             zones.push(Zone { name: format!("Port {} inner", port + 1), leds: fans * LEDS_PER_FAN });
             zones.push(Zone { name: format!("Port {} edge", port + 1), leds: fans * LEDS_PER_FAN });
         }
