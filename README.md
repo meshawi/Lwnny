@@ -1,111 +1,63 @@
-# Lwnny
+<p align="center">
+  <img src="src/logo.png" alt="Lwnny" width="160">
+</p>
 
-One RGB controller for your whole PC. No vendor apps, no fighting over who
-owns the lights.
+<h1 align="center">Lwnny</h1>
 
-Lwnny talks to each piece of hardware directly over USB HID, the GPU's I2C
-bus or the chipset SMBus, shows every zone in one window, and keeps running
-in the tray.
+<p align="center">One RGB controller for your whole PC. No vendor apps.</p>
+
+Lwnny talks to the hardware directly (USB HID, GPU I2C, chipset SMBus),
+shows every zone in one window, and lives in the tray. 10 MB, ~35 MB RAM,
+near-zero CPU.
 
 ## Supported hardware
 
-| Device | Interface | Saves to device |
+| Device | How | Survives reboot |
 | --- | --- | --- |
-| Lian Li UNI HUB SL-Infinity (SL-Infinity fans) | USB HID `0CF2:A102` | held while powered |
-| Lian Li Strimer Plus (24-pin and GPU cables) | USB HID `0CF2:A200` | no |
-| ASUS Aura motherboards (X570 generation, e.g. ROG Crosshair VIII Hero) incl. both addressable headers | USB HID `0B05:18F3` | yes |
-| HyperX QuadCast S | USB HID `0951:171F` | yes |
-| ASUS ROG Strix GeForce RTX 30-series (ENE controller) | NvAPI I2C `0x67` | yes |
-| Corsair Vengeance RGB Pro / Dominator / Vengeance RGB DDR5 memory | SMBus via PawnIO, `0x58`-`0x5F` | yes (stored in each stick) |
+| Lian Li UNI HUB SL-Infinity | USB | while powered |
+| Lian Li Strimer Plus (24-pin, GPU) | USB | no |
+| ASUS Aura motherboards (X570, both ARGB headers) | USB | yes |
+| ASUS ROG Strix RTX 30-series | NvAPI I2C | yes |
+| Corsair Vengeance RGB Pro / Dominator / DDR5 RAM | SMBus via PawnIO | yes |
+| HyperX QuadCast S | USB | yes |
 
-Not controlled on purpose: NZXT Kraken coolers (leave those to NZXT CAM so
-pump and fan curves stay where they are).
-
-### RAM, PawnIO and administrator rights
-
-Memory sticks sit on the chipset's SMBus, which only a kernel driver can
-reach. Lwnny uses [PawnIO](https://pawnio.eu) (GPL-2.0-or-later, signed by
-Microsoft) and its `SmbusPIIX4` module, bundled in `src-tauri/pawnio/`.
-Install PawnIO once; Lwnny loads the module itself. Because the driver
-requires administrator rights, Lwnny asks for elevation when it starts. If
-you decline, everything except the RAM still works.
-
-The SMBus is shared with monitoring tools, so Lwnny takes the system-wide
-SMBus mutex for every transfer and never polls the bus. The sticks store
-every write in flash, so Lwnny waits until a color has stopped changing for
-0.7 s and then writes once, in the background, skipping sticks that already
-show that color. A full write of four sticks takes about 1.2 s, most of it
-the sticks' own commit time. The colors survive reboots without Lwnny
-running. Intel chipsets (`SmbusI801` module) are not wired up yet.
+NZXT Kraken is left to NZXT CAM on purpose, so pump and fan curves stay put.
 
 ## Features
 
-- Per-zone colors, whole-device color, "Everything" color with quick swatches.
-- Static lighting (animated effects are planned once every device is covered).
-- Brightness.
-- Rename any zone and flash it with **Find** to see where it is in the case.
-- Profiles: snapshot everything and reload it with one click.
-- **Save to hardware**: write the current colors into the devices' own memory
-  so they come up right at boot, before Lwnny starts.
-- **Own color** per device: that device ignores "Everything" and keeps its
-  own colors.
-- **Color correction / Calibrate**: per-device channel order and RGB gains with
-  a guided wizard, for hardware whose LEDs are off from the factory.
-- Tray icon, close-to-tray, optional start with Windows (a scheduled task,
-  because an elevated program cannot start from the registry Run key).
-- Last lighting is restored automatically on launch.
+- Everything, per-device or per-zone colors, brightness, quick swatches.
+- Rename zones; **Find** flashes a zone so you know which one it is.
+- Profiles. **Save to hardware** so colors are right before Windows boots.
+- **Own color** locks a device out of "Everything".
+- Color correction wizard for LEDs that are off from the factory.
+- Tray, close-to-tray, start with Windows, last lighting restored on launch.
+
+Static colors only for now. Effects are next.
+
+## RAM needs admin
+
+RAM sits on the SMBus, which only a kernel driver can reach. Install
+[PawnIO](https://pawnio.eu) once; Lwnny bundles the signed SMBus module and
+asks for administrator rights at start. Decline and everything but the RAM
+still works. Writes go through the system SMBus mutex and happen once per
+color change, after it settles, so the sticks' flash is not worn.
 
 ## Build
 
-Requirements: Rust (stable, MSVC toolchain), Node.js, Microsoft Visual C++
-Build Tools, WebView2 (ships with Windows 11).
+Rust (MSVC), Node.js, VC++ Build Tools, WebView2.
 
 ```powershell
 npm install
-npm run dev          # run with hot reload
-npm run build        # produce an installer in src-tauri/target/release/bundle
+npm run dev      # hot reload
+npm run build    # installer in src-tauri/target/release/bundle
 ```
 
-Diagnostics without the UI:
+Command-line diagnostics: `cargo run --bin probe -- list` in `src-tauri`
+(`set`, `zone`, `hubmap`, `bench`, `rambench`). `cargo test` runs the unit
+tests. Settings live in `%APPDATA%\Lwnny`.
 
-```powershell
-cd src-tauri
-cargo run --bin probe -- list                 # detect devices and print zones
-cargo run --bin probe -- set all ff00ff       # everything purple
-cargo run --bin probe -- hubmap               # a different color on each hub channel
-cargo run --bin probe -- bench                # time one frame per device
-cargo run --bin probe -- rambench             # SMBus speed per wait mode (admin)
-cargo test                                    # unit tests (no hardware needed)
-```
+## License
 
-The RAM only shows up when the probe runs as administrator;
-`tools\probe-ram.cmd` and `tools\test-ram.cmd` do that for you.
-
-Replace the icon: put a square PNG at `assets/logo.png` and run `npm run icon`.
-
-## Layout
-
-```
-src/                 front end (plain HTML, CSS, JS; no framework)
-src-tauri/src/
-  lib.rs             Tauri commands, tray, window
-  elevate.rs         administrator check, UAC relaunch, scheduled-task autostart
-  engine.rs          scene, settings, profiles, effect ticker
-  devices/           one driver per device, all implementing `Device`
-  devices/pawnio.rs  PawnIO driver client and PIIX4 SMBus transfers
-  bin/probe.rs       command-line diagnostics
-src-tauri/pawnio/    signed PawnIO SMBus module (LGPL-2.1) and its license
-assets/logo.png      source icon (npm run icon regenerates the sizes)
-```
-
-`hardware.json` (the machine this was built on, with serial numbers) is
-git-ignored on purpose.
-
-Settings, the last scene and profiles live in `%APPDATA%\Lwnny`.
-
-## Credits
-
-Device protocols were learned from the [OpenRGB](https://openrgb.org) project
-(GPL-2.0-or-later) and re-implemented in Rust. SMBus access goes through
-[PawnIO](https://pawnio.eu) by namazso (driver GPL-2.0-or-later with an IOCTL
-exception, modules LGPL-2.1). Lwnny is released under GPL-2.0-or-later.
+GPL-2.0-or-later. Device protocols were learned from
+[OpenRGB](https://openrgb.org). SMBus access uses
+[PawnIO](https://pawnio.eu) by namazso (module LGPL-2.1, in `src-tauri/pawnio/`).
