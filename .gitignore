@@ -1,0 +1,7 @@
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+*.log
+
+# Local machine profile (serial numbers, MAC addresses). Never publish.
+hardware.json

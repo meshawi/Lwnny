@@ -1,0 +1,40 @@
+[package]
+name = "lwnny"
+version = "0.1.0"
+description = "Lwnny - one RGB controller for your whole PC"
+edition = "2021"
+rust-version = "1.80"
+license = "GPL-2.0-or-later"
+
+[lib]
+name = "lwnny_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "lwnny"
+path = "src/main.rs"
+
+[[bin]]
+name = "probe"
+path = "src/bin/probe.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+hidapi = "2.6"
+libloading = "0.8"
+dirs = "6"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true

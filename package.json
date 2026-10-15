@@ -1,0 +1,15 @@
+{
+  "name": "lwnny",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Lwnny - one RGB controller for your whole PC",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icon": "tauri icon assets/logo.png -o src-tauri/icons"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.2"
+  }
+}

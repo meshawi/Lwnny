@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lwnny</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img class="logo" src="logo.png" alt="" />
+      <div>
+        <h1>Lwnny</h1>
+        <p class="sub">One controller for every light in your PC</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="btn-rescan" class="ghost" title="Re-detect hardware. Use after plugging or unplugging an RGB device, or if a card shows a red dot.">Rescan</button>
+      <button id="btn-save-hw" title="Write the current colors into each device's own memory (motherboard, GPU, mic) so they show them even before Lwnny starts, e.g. during boot.">Save to hardware</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel controls">
+      <h2>Global</h2>
+
+      <label class="field">
+        <span>Everything</span>
+        <div class="row">
+          <input type="color" id="all-color" value="#ffffff" />
+          <div class="swatches" id="swatches"></div>
+        </div>
+      </label>
+
+      <label class="field">
+        <span>Brightness <b id="bright-val">100%</b></span>
+        <input type="range" id="brightness" min="0" max="100" step="1" value="100" />
+      </label>
+
+      <h2>Profiles</h2>
+      <p class="help">A profile is a snapshot of everything: every zone color and the brightness. Save one per mood ("Work white", "Gaming purple") and load it with one click.</p>
+      <div class="row">
+        <input type="text" id="profile-name" placeholder="Profile name" />
+        <button id="btn-save-profile">Save</button>
+      </div>
+      <ul id="profiles" class="profiles"></ul>
+
+      <h2>Settings</h2>
+      <div class="settings">
+        <p class="help">The Lian Li hub has 4 fan ports. Tell Lwnny how many fans are daisy-chained on each port so it sends the right amount of LED data. 0 means the port is empty.</p>
+        <div class="field"><span>Fans on hub port 1</span><input type="number" id="fans-0" min="0" max="4" /></div>
+        <div class="field"><span>Fans on hub port 2</span><input type="number" id="fans-1" min="0" max="4" /></div>
+        <div class="field"><span>Fans on hub port 3</span><input type="number" id="fans-2" min="0" max="4" /></div>
+        <div class="field"><span>Fans on hub port 4</span><input type="number" id="fans-3" min="0" max="4" /></div>
+        <p class="help">The motherboard's two addressable RGB headers: how many LEDs are plugged into each (0 = nothing). Your single fan is on one of them.</p>
+        <div class="field"><span>LEDs on ARGB header 1</span><input type="number" id="argb-0" min="0" max="240" /></div>
+        <div class="field"><span>LEDs on ARGB header 2</span><input type="number" id="argb-1" min="0" max="240" /></div>
+        <label class="check"><input type="checkbox" id="autostart" /> Start with Windows (minimized to tray)</label>
+        <button id="btn-save-settings" class="ghost">Apply settings &amp; rescan</button>
+      </div>
+    </section>
+
+    <section class="devices" id="devices"></section>
+  </main>
+
+  <footer class="status" id="status">Ready</footer>
+
+  <dialog id="cal">
+    <div class="cal-head">
+      <h3 id="cal-title">Calibrate</h3>
+      <button class="ghost tiny" id="cal-close">Cancel</button>
+    </div>
+
+    <section class="cal-step">
+      <h2>Step 1 · Channels</h2>
+      <p class="note">Click a test button, look at the device, then click the color you actually see.</p>
+      <div class="cal-grid" id="cal-channels"></div>
+      <p class="note" id="cal-order">Order so far: not tested</p>
+    </section>
+
+    <section class="cal-step">
+      <h2>Step 2 · White balance</h2>
+      <p class="note">Each numbered button shows a different white mix on the device. Click them in order and stop at the one that looks closest to white.</p>
+      <div class="cal-grid" id="cal-whites"></div>
+    </section>
+
+    <section class="cal-step">
+      <h2>Step 3 · Fine tune</h2>
+      <p class="note">Nudge until it looks white. Each click re-applies immediately.</p>
+      <div class="cal-grid" id="cal-tune">
+        <button data-tune="g-">Too yellow / green</button>
+        <button data-tune="g+">Too pink / purple</button>
+        <button data-tune="r-">Too orange / red</button>
+        <button data-tune="r+">Too cyan / teal</button>
+        <button data-tune="b-">Too blue</button>
+        <button data-tune="dim">Too dim (raise all)</button>
+      </div>
+      <p class="note" id="cal-gains"></p>
+    </section>
+
+    <div class="row cal-foot">
+      <button id="cal-done">Looks white · Done</button>
+      <button class="ghost" id="cal-reset">Reset to default</button>
+    </div>
+  </dialog>
+
+  <script src="main.js"></script>
+</body>
+</html>
